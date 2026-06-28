@@ -5876,9 +5876,26 @@ function updateDecorateStats(deceasedId){
     +'</div>';
 }
 
-// Init Pi SDK
+// Init Pi SDK + authenticate on load (required for Pi App Studio verification)
 (function(){
-  function init(){if(typeof Pi!=='undefined')Pi.init({version:'2.0',sandbox:true});}
+  function init(){
+    if(typeof Pi==='undefined')return;
+    Pi.init({version:'2.0',sandbox:false}); // false = production Pi Browser
+    // Authenticate immediately so Pi App Studio can verify the app
+    Pi.authenticate(['username','payments'], function(payment){
+      // Incomplete payment handler — complete any pending payments
+      console.log('[Pi] Incomplete payment found:',payment);
+    }).then(function(auth){
+      if(auth&&auth.user){
+        console.log('[Pi] Authenticated:',auth.user.username);
+        // Store Pi username for use in gift payments
+        window._piUser = auth.user;
+        window._piAccessToken = auth.accessToken;
+      }
+    }).catch(function(err){
+      console.warn('[Pi] Authentication cancelled or failed:',err);
+    });
+  }
   if(typeof Pi!=='undefined')init();
   else window.addEventListener('load',init);
 })();
