@@ -5638,21 +5638,62 @@ function pickDecoration(id){
 }
 
 // ── Purchase & enter place mode ──────────────────────────────────────
-function purchaseDecoration(){
+async function purchaseDecoration(){
   if(!_selectedDecoration||!_decorateDeceasedId)return;
   if(typeof Pi==='undefined'){
-    toast('⚠️ Please open piRemembered inside the Pi Browser to decorate.');return;
+    toast('⚠️ Please open piRemembered inside Pi Browser to decorate.');return;
   }
   var gift=_selectedDecoration,decId=_decorateDeceasedId,decName=_decorateDeceasedName;
   var msg=(document.getElementById('decorateMsg').value||'').trim().slice(0,120);
+  var btn=document.getElementById('dgPlaceBtn');
+
+  // ── Step 1: Init Pi SDK as Promise (required before createPayment) ──
+  try{
+    if(!_piInitialized){
+      await Pi.init({version:'2.0',sandbox:false});
+      _piInitialized=true;
+      console.log('[Pi] SDK init ✓');
+    }
+  }catch(e){
+    console.error('[Pi] Init error:',e);
+  }
+
+  // ── Step 2: Authenticate user (required before createPayment) ────
+  if(!window._piAccessToken){
+    if(btn){btn.textContent='Authenticating with Pi…';btn.style.opacity='.75';}
+    try{
+      var auth=await Pi.authenticate(['username','payments'],function(incompletePmt){
+        console.log('[Pi] Incomplete payment found:',incompletePmt.identifier);
+      });
+      if(auth&&auth.accessToken){
+        window._piAccessToken=auth.accessToken;
+        window._piUser=auth.user;
+        console.log('[Pi] Authenticated ✓',auth.user.username);
+        // Validate token
+        fetch('https://api.minepi.com/v2/me',{headers:{'Authorization':'Bearer '+auth.accessToken}})
+          .then(function(r){return r.json();})
+          .then(function(p){window._piUser=p;})
+          .catch(function(e){console.warn('[Pi] Token validation:',e);});
+      }
+    }catch(e){
+      console.warn('[Pi] Auth failed:',e);
+      if(btn){btn.classList.add('active');btn.textContent='Pay & Place on Memorial';btn.style.opacity='1';}
+      toast('⚠️ Pi sign-in required. Please try again.');
+      return;
+    }
+  }
+
+  if(btn){btn.textContent='Opening Pi Wallet…';btn.style.opacity='.8';}
+  closeDecorateShop();
+
+  // ── Step 3: Create payment ───────────────────────────────────────
   var paymentData={
     amount:gift.price,
-    // Product: Memorial Decoration — memo and metadata must be consistent
     memo:'Memorial Decoration — '+gift.name+' for '+decName+' on piRemembered',
     metadata:{
       app:'piremembered',
-      type:'memorial_decoration',       // product type (U2A)
-      product_name:gift.name,           // e.g. "Rose", "Lantern"
+      type:'memorial_decoration',
+      product_name:gift.name,
       product_id:gift.id,
       deceased_id:decId,
       deceased_name:decName,
@@ -5661,7 +5702,7 @@ function purchaseDecoration(){
       message:msg
     }
   };
-  closeDecorateShop();
+
   try{
     Pi.createPayment(paymentData,{
       onReadyForServerApproval:function(paymentId){
@@ -5670,10 +5711,18 @@ function purchaseDecoration(){
       onReadyForServerCompletion:function(paymentId,txid){
         completeDecoration(paymentId,txid,paymentData.metadata,msg);
       },
-      onCancel:function(){toast('Decoration cancelled.');},
-      onError:function(e){toast('❌ Pi error: '+(e.message||e));}
+      onCancel:function(){
+        toast('Decoration cancelled.');
+      },
+      onError:function(e){
+        toast('❌ Pi error: '+(e.message||e));
+        console.error('[Pi] createPayment error:',e);
+      }
     });
-  }catch(e){toast('❌ Pi payment error: '+e.message);}
+  }catch(e){
+    toast('❌ Pi payment error: '+e.message);
+    console.error('[Pi] createPayment exception:',e);
+  }
 }
 
 async function approveDecoration(paymentId,meta){
