@@ -1204,7 +1204,7 @@ function renderApp(){
     const feedAv=document.getElementById('feedAvatar');
     if(feedAv)feedAv.innerHTML=CU.avatar?`<img src="${CU.avatar}">`:(CU.firstName.charAt(0)+(CU.lastName?.charAt(0)||''));
     const invLink=document.getElementById('inviteLink');
-    if(invLink)invLink.textContent=`deswats.github.io/remembered?ref=${CU.inviteCode||CU.id}`;
+    if(invLink)invLink.textContent=`apppirememberedw7497.pinet.com?ref=${CU.inviteCode||CU.id}`;
   }
 }
 
@@ -1738,7 +1738,7 @@ function renderPendingRequests(){
 // ═══════════════════════════════════════════════════════════
 function openInviteModal(){
   if(!CU){toast('Please sign in.');showPageDirect('authPage');setAuthMode('login');return;}
-  const il=document.getElementById('inviteLink');if(il)il.textContent=`deswats.github.io/remembered?ref=${CU.inviteCode||CU.id}`;
+  const il=document.getElementById('inviteLink');if(il)il.textContent=`apppirememberedw7497.pinet.com?ref=${CU.inviteCode||CU.id}`;
   document.getElementById('inviteEmail').value='';
   document.getElementById('friendSearch').value='';
   document.getElementById('friendSearchResults').innerHTML='';
@@ -5702,30 +5702,50 @@ async function purchaseDecoration(){
 }
 
 async function approveDecoration(paymentId,meta){
+  // 1. Save to Supabase immediately
   if(sb){
     try{
+      var giftObj=_selectedDecoration||{};
       await sb.from('memorial_gifts').insert({
-        payment_id:paymentId,deceased_id:meta.deceased_id,sender_id:meta.sender_id,
+        payment_id:paymentId,
+        deceased_id:meta.deceased_id,
+        sender_id:meta.sender_id||null,
         sender_name:CU?(CU.firstName+' '+(CU.lastName||'')).trim():'Someone',
-        gift_id:meta.gift_id,gift_emoji:meta.gift_emoji,gift_name:meta.gift_name,
-        message:meta.message,price_pi:_selectedDecoration?_selectedDecoration.price:0,
-        status:'pending',pos_x:50,pos_y:40,created_at:new Date().toISOString()
+        gift_id:meta.product_id||meta.gift_id||giftObj.id||'rose',
+        gift_emoji:meta.gift_emoji||giftObj.emoji||'🌹',
+        gift_name:meta.product_name||meta.gift_name||giftObj.name||'Gift',
+        message:meta.message||'',
+        price_pi:giftObj.price||0,
+        status:'pending',
+        pos_x:50,pos_y:40,
+        created_at:new Date().toISOString()
       });
-    }catch(e){console.error('[Decorate] insert:',e);}
+    }catch(e){console.error('[Decorate] Supabase insert:',e);}
   }
-  try{
-    await fetch(PI_GIFT_FN_URL,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:'approve',paymentId:paymentId})});
-  }catch(e){console.error('[Decorate] approve:',e);}
+  // 2. Call Edge Function to approve — MUST be fast or Pi expires the payment
+  // Fire immediately, non-blocking
+  fetch(PI_GIFT_FN_URL,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'approve',paymentId:paymentId})
+  }).then(function(r){return r.json();})
+    .then(function(d){
+      if(d.ok){console.log('[Decorate] Approved ✓');}
+      else{console.error('[Decorate] Approve failed:',d.error);}
+    })
+    .catch(function(e){console.error('[Decorate] Approve fetch:',e);});
 }
 
 async function completeDecoration(paymentId,txid,meta,msg){
-  try{
-    await fetch(PI_GIFT_FN_URL,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:'complete',paymentId:paymentId,txid:txid})});
-  }catch(e){console.error('[Decorate] complete:',e);}
+  // Call Edge Function to complete — fire and don't wait (non-blocking)
+  fetch(PI_GIFT_FN_URL,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'complete',paymentId:paymentId,txid:txid})
+  }).then(function(r){return r.json();})
+    .then(function(d){console.log('[Decorate] complete:',d);})
+    .catch(function(e){console.warn('[Decorate] complete error:',e);});
+  // Proceed immediately — don't wait for Edge Function
   // Enter place mode — user taps on cover to position
   _placeModeGift={
     id:meta.gift_id,emoji:meta.gift_emoji,
