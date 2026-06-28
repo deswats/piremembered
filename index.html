@@ -1189,7 +1189,7 @@ function updateNav(){
     ${isAdminUser?`<button type="button" class="nb" style="background:rgba(201,168,76,.15);border:1px solid rgba(201,168,76,.5);color:var(--gold);font-weight:600" onclick="openAdminDashboard()">📊 Admin</button>`:''}
     <button type="button" class="nb" onclick="doLogout()">Sign Out</button>`;
   }else{
-    na.innerHTML=`<button type="button" class="nb" style="background:rgba(111,75,232,.15);border-color:rgba(171,92,255,.4);color:#c8a4ff;display:inline-flex;align-items:center;gap:.3rem" onclick="piAuthenticate().then(function(){updateNav();})" title="Sign in with Pi Network"><span style="width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,#6f4be8,#ab5cff);display:inline-flex;align-items:center;justify-content:center;font-size:.5rem;font-weight:700;color:#fff">π</span>Pi Sign In</button><button type="button" class="nb" onclick="showPageDirect('authPage');setAuthMode('login')">Sign In</button><button type="button" class="nb prim" onclick="showPageDirect('authPage');setAuthMode('register')">Join Free</button>`;
+    na.innerHTML=`<button type="button" class="nb" style="background:rgba(111,75,232,.15);border-color:rgba(171,92,255,.4);color:#c8a4ff;display:inline-flex;align-items:center;gap:.3rem" onclick="handleLogin()" title="Sign in with Pi Network"><span style="width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,#6f4be8,#ab5cff);display:inline-flex;align-items:center;justify-content:center;font-size:.5rem;font-weight:700;color:#fff">π</span>Pi Sign In</button><button type="button" class="nb" onclick="showPageDirect('authPage');setAuthMode('login')">Sign In</button><button type="button" class="nb prim" onclick="showPageDirect('authPage');setAuthMode('register')">Join Free</button>`;
   }
   updateNotifBadge();
 }
@@ -5647,40 +5647,16 @@ async function purchaseDecoration(){
   var msg=(document.getElementById('decorateMsg').value||'').trim().slice(0,120);
   var btn=document.getElementById('dgPlaceBtn');
 
-  // ── Step 1: Init Pi SDK as Promise (required before createPayment) ──
-  try{
-    if(!_piInitialized){
-      await Pi.init({version:'2.0',sandbox:false});
-      _piInitialized=true;
-      console.log('[Pi] SDK init ✓');
-    }
-  }catch(e){
-    console.error('[Pi] Init error:',e);
-  }
-
-  // ── Step 2: Authenticate user (required before createPayment) ────
-  if(!window._piAccessToken){
+  // ── Ensure Pi user is authenticated via PiService ───────────────
+  if(!piService.accessToken){
     if(btn){btn.textContent='Authenticating with Pi…';btn.style.opacity='.75';}
-    try{
-      var auth=await Pi.authenticate(['username','payments'],function(incompletePmt){
-        console.log('[Pi] Incomplete payment found:',incompletePmt.identifier);
-      });
-      if(auth&&auth.accessToken){
-        window._piAccessToken=auth.accessToken;
-        window._piUser=auth.user;
-        console.log('[Pi] Authenticated ✓',auth.user.username);
-        // Validate token
-        fetch('https://api.minepi.com/v2/me',{headers:{'Authorization':'Bearer '+auth.accessToken}})
-          .then(function(r){return r.json();})
-          .then(function(p){window._piUser=p;})
-          .catch(function(e){console.warn('[Pi] Token validation:',e);});
-      }
-    }catch(e){
-      console.warn('[Pi] Auth failed:',e);
+    var loginResult = await piService.login(['username','payments']);
+    if(!loginResult.success){
       if(btn){btn.classList.add('active');btn.textContent='Pay & Place on Memorial';btn.style.opacity='1';}
-      toast('⚠️ Pi sign-in required. Please try again.');
+      toast('⚠️ Pi sign-in required. Please open in Pi Browser and try again.');
       return;
     }
+    console.log('[Pi] Ready to pay as:', loginResult.user.username);
   }
 
   if(btn){btn.textContent='Opening Pi Wallet…';btn.style.opacity='.8';}
@@ -5936,147 +5912,148 @@ function updateDecorateStats(deceasedId){
 
 // ═══════════════════════════════════════════════════════════
 // PI NETWORK AUTHENTICATION
-// Implements Pi App Studio verification requirements:
-// - Pi.init() treated as Promise, awaited before authenticate
-// - Auto-triggers on load + manual Sign In button
-// - Uses "username" scope
-// - Validates accessToken via GET https://api.minepi.com/v2/me
+// Implemented per pi-sdk-js PiService pattern:
+// https://pi-apps.github.io/pi-sdk-docs/quick-start/genai/Authentication
+// - PiService class wraps all Pi auth logic
+// - Pi.authenticate() called via service (not raw window.Pi)
+// - Auto-triggers on load + manual Pi Sign In button
+// - username scope only
+// - accessToken validated via GET https://api.minepi.com/v2/me
 // ═══════════════════════════════════════════════════════════
 
-var _piInitialized = false;
-var _piAuthInProgress = false;
-
-// ── Step 1: Init Pi SDK as a Promise ────────────────────────
-async function initPiSDK() {
-  if (typeof Pi === 'undefined') {
-    console.warn('[Pi] SDK not loaded — must open in Pi Browser');
-    return false;
+/**
+ * PiService — wraps Pi Network auth per official pi-sdk-js pattern.
+ * For vanilla JS / no-framework context (matches piRemembered stack).
+ */
+class PiService {
+  constructor() {
+    this.user = null;
+    this.accessToken = null;
+    this._ready = false;
+    this._authInProgress = false;
   }
-  if (_piInitialized) return true;
-  try {
-    await Pi.init({ version: '2.0', sandbox: false });
-    _piInitialized = true;
-    console.log('[Pi] SDK initialised ✓');
-    return true;
-  } catch(e) {
-    console.error('[Pi] Init failed:', e);
-    return false;
-  }
-}
 
-// ── Step 2: Authenticate with Pi ────────────────────────────
-async function piAuthenticate() {
-  if (_piAuthInProgress) return;
-  _piAuthInProgress = true;
-
-  try {
-    // Must fully await init before calling authenticate
-    var ready = await initPiSDK();
-    if (!ready) {
-      _piAuthInProgress = false;
-      return;
+  /** Step 1: Init SDK as Promise before any other call */
+  async _ensureReady() {
+    if (this._ready) return true;
+    if (typeof Pi === 'undefined') return false;
+    try {
+      await Pi.init({ version: '2.0', sandbox: false });
+      this._ready = true;
+      return true;
+    } catch(e) {
+      console.error('[PiService] init error:', e);
+      return false;
     }
+  }
 
-    console.log('[Pi] Starting authentication...');
+  /** Required callback — handles interrupted payments */
+  onIncompletePaymentFound(payment) {
+    console.warn('[PiService] Incomplete payment found:', payment.identifier);
+  }
 
-    var auth = await Pi.authenticate(
-      ['username'],        // scope: username only (no API key needed)
-      function onIncompletePaymentFound(payment) {
-        console.log('[Pi] Incomplete payment found:', payment.identifier);
-        // Attempt to complete any pending payment
-        if (payment && payment.identifier) {
-          fetch(PI_GIFT_FN_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'complete', paymentId: payment.identifier, txid: payment.transaction ? payment.transaction.txid : '' })
-          }).catch(function(e){ console.warn('[Pi] Incomplete payment cleanup error:', e); });
-        }
+  /**
+   * Authenticate user with Pi.
+   * @param {string[]} scopes - defaults to ['username']
+   */
+  async login(scopes) {
+    scopes = scopes || ['username'];
+    if (this._authInProgress) return { success: false, error: 'Auth in progress' };
+    this._authInProgress = true;
+    try {
+      var ok = await this._ensureReady();
+      if (!ok) {
+        this._authInProgress = false;
+        return { success: false, error: 'Pi SDK not available — open in Pi Browser' };
       }
-    );
 
-    if (!auth || !auth.accessToken) {
-      console.warn('[Pi] No access token returned');
-      _piAuthInProgress = false;
-      return;
+      // The service handles window.Pi.authenticate internally
+      var auth = await Pi.authenticate(scopes, this.onIncompletePaymentFound.bind(this));
+
+      this.user = auth.user;
+      this.accessToken = auth.accessToken;
+      console.log('[PiService] Authenticated as:', this.user.username);
+
+      // Validate token with backend — GET /v2/me (no API key needed)
+      await this._validateToken(auth.accessToken);
+
+      this._authInProgress = false;
+      return { success: true, accessToken: auth.accessToken, user: auth.user };
+
+    } catch(e) {
+      console.error('[PiService] Authentication error:', e);
+      this._authInProgress = false;
+      return { success: false, error: e.message || String(e) };
     }
+  }
 
-    console.log('[Pi] Got access token, validating with backend...');
-
-    // ── Step 3: Validate token via GET https://api.minepi.com/v2/me ──
-    // No Pi API key required for this endpoint — Bearer token only
-    await validatePiToken(auth.accessToken, auth.user);
-
-  } catch(e) {
-    console.warn('[Pi] Authentication failed or cancelled:', e);
-  } finally {
-    _piAuthInProgress = false;
+  /** Validate accessToken via Pi Platform API */
+  async _validateToken(accessToken) {
+    try {
+      var res = await fetch('https://api.minepi.com/v2/me', {
+        method: 'GET',
+        headers: { 'Authorization': 'Bearer ' + accessToken }
+      });
+      if (!res.ok) { console.warn('[PiService] Token validation status:', res.status); return; }
+      var profile = await res.json();
+      this.user = profile;
+      window._piUser = profile;
+      window._piAccessToken = accessToken;
+      console.log('[PiService] Token validated ✓ uid:', profile.uid);
+    } catch(e) {
+      console.warn('[PiService] Token validation error:', e);
+    }
   }
 }
 
-// ── Step 3: Backend token validation ────────────────────────
-async function validatePiToken(accessToken, piUser) {
-  try {
-    // Call Pi's /v2/me to verify the token is genuine
-    var res = await fetch('https://api.minepi.com/v2/me', {
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + accessToken }
-    });
+// Singleton instance
+var piService = new PiService();
 
-    if (!res.ok) {
-      console.error('[Pi] Token validation failed:', res.status);
-      return;
+/**
+ * handleLogin — UI trigger (called by Pi Sign In button)
+ * Per official docs: bind to button, call service, update UI
+ */
+async function handleLogin() {
+  var result = await piService.login(['username']);
+  if (result.success) {
+    console.log('[Pi] Signed in:', result.user.username);
+    // Update nav badge to show Pi username
+    var na = document.getElementById('navActions');
+    if (na && !window.CU) {
+      var existing = document.getElementById('piNavBadge');
+      if (!existing) {
+        var badge = document.createElement('span');
+        badge.id = 'piNavBadge';
+        badge.style.cssText = 'font-size:.7rem;color:#c8a4ff;display:inline-flex;align-items:center;gap:.25rem;';
+        badge.innerHTML = '<span style="width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,#6f4be8,#ab5cff);display:inline-flex;align-items:center;justify-content:center;font-size:.5rem;font-weight:700;color:#fff">π</span>' + result.user.username;
+        na.insertBefore(badge, na.firstChild);
+      }
     }
-
-    var piProfile = await res.json();
-    console.log('[Pi] Token validated ✓ Username:', piProfile.username);
-
-    // Store Pi user info globally for use in payments
-    window._piUser        = piProfile;
-    window._piAccessToken = accessToken;
-
-    // Update nav to show Pi username if not already signed into Remembered
-    if (!CU) {
-      updatePiNavBadge(piProfile.username);
+  } else {
+    console.warn('[Pi] Login failed:', result.error);
+    if (result.error && result.error.indexOf('Pi Browser') > -1) {
+      toast('⚠️ Please open this app inside Pi Browser to use Pi features.');
     }
-
-    console.log('[Pi] Authentication complete ✓');
-
-  } catch(e) {
-    console.error('[Pi] Token validation error:', e);
   }
+  return result;
 }
 
-// ── Show Pi username in nav when not signed into Remembered ──
-function updatePiNavBadge(username) {
-  var na = document.getElementById('navActions');
-  if (!na || CU) return;
-  // Add a subtle Pi badge next to Sign In buttons
-  var existing = document.getElementById('piNavBadge');
-  if (!existing) {
-    var badge = document.createElement('span');
-    badge.id = 'piNavBadge';
-    badge.style.cssText = 'font-size:.7rem;color:#c8a4ff;display:flex;align-items:center;gap:.2rem;';
-    badge.innerHTML = '<span style="width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,#6f4be8,#ab5cff);display:inline-flex;align-items:center;justify-content:center;font-size:.5rem;font-weight:700;color:#fff">π</span>' + username;
-    na.insertBefore(badge, na.firstChild);
-  }
-}
-
-// ── Auto-trigger on app load (required by Pi App Studio) ─────
-(function(){
-  function tryPiAuth() {
-    if (typeof Pi !== 'undefined') {
-      piAuthenticate();
-    } else {
-      // Pi SDK loads async — retry after short delay
+// Auto-trigger authentication when app loads (required by Pi App Studio)
+(function autoAuth() {
+  function run() {
+    if (typeof Pi === 'undefined') {
+      // Retry once after 2s — SDK may still be loading
       setTimeout(function() {
-        if (typeof Pi !== 'undefined') piAuthenticate();
-      }, 1500);
+        if (typeof Pi !== 'undefined') piService.login(['username']);
+      }, 2000);
+      return;
     }
+    piService.login(['username']);
   }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', tryPiAuth);
+    document.addEventListener('DOMContentLoaded', run);
   } else {
-    tryPiAuth();
+    run();
   }
 })();
 </script>
