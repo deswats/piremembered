@@ -6014,7 +6014,7 @@ var piService = new PiService();
  * Per official docs: bind to button, call service, update UI
  */
 async function handleLogin() {
-  var result = await piService.login(['username']);
+  var result = await piService.login(['username', 'payments']);
   if (result.success) {
     console.log('[Pi] Signed in:', result.user.username);
     // Update nav badge to show Pi username
@@ -6044,11 +6044,11 @@ async function handleLogin() {
     if (typeof Pi === 'undefined') {
       // Retry once after 2s — SDK may still be loading
       setTimeout(function() {
-        if (typeof Pi !== 'undefined') piService.login(['username']);
+        if (typeof Pi !== 'undefined') piService.login(['username', 'payments']);
       }, 2000);
       return;
     }
-    piService.login(['username']);
+    piService.login(['username', 'payments']);
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', run);
