@@ -5555,7 +5555,7 @@ function guestBrowse(){showPage('appPage');}
 // DECORATE MEMORIAL — Pi Network gift placement system
 // ═══════════════════════════════════════════════════════════
 
-var PI_GIFT_FN_URL='https://bemukaghdzqqjszwtfrk.supabase.co/functions/v1/pi-gift';
+var PI_GIFT_FN_URL='https://bemukaghdzqqjszwtfrk.supabase.co/functions/v1/bright-handler';
 
 var GIFT_CATALOGUE=[
   {id:'rose',      emoji:'🌹',name:'Rose',          price:0.10,anim:'ga-sway'  },
@@ -5647,10 +5647,19 @@ function purchaseDecoration(){
   var msg=(document.getElementById('decorateMsg').value||'').trim().slice(0,120);
   var paymentData={
     amount:gift.price,
-    memo:'Decoration for '+decName+' on piRemembered — '+gift.name,
-    metadata:{app:'piremembered',type:'memorial_decoration',deceased_id:decId,
-      deceased_name:decName,gift_id:gift.id,gift_emoji:gift.emoji,
-      gift_name:gift.name,sender_id:CU?CU.id:null,message:msg}
+    // Product: Memorial Decoration — memo and metadata must be consistent
+    memo:'Memorial Decoration — '+gift.name+' for '+decName+' on piRemembered',
+    metadata:{
+      app:'piremembered',
+      type:'memorial_decoration',       // product type (U2A)
+      product_name:gift.name,           // e.g. "Rose", "Lantern"
+      product_id:gift.id,
+      deceased_id:decId,
+      deceased_name:decName,
+      gift_emoji:gift.emoji,
+      sender_id:CU?CU.id:null,
+      message:msg
+    }
   };
   closeDecorateShop();
   try{
