@@ -5802,12 +5802,11 @@ function handleCoverClick(e){
 
 // ── Load decorations from Supabase ───────────────────────────────────
 async function loadDecorationsForDeceased(deceasedId){
-  // Inject cover decorations layer if not present
+  // Inject cover decorations layer onto the memorial cover
   injectDecorateLayer(deceasedId);
-  // Check if this is quartno74's memorial — seed example gifts
   var dec=CACHE.deceased?CACHE.deceased.find(function(d){return d.id===deceasedId;}):null;
-  var isOwner=dec&&dec.created_by&&CU&&dec.created_by===CU.id;
-  // Always try Supabase first
+
+  // Load real decorations from Supabase — visible to ALL users
   if(sb){
     try{
       var res=await sb.from('memorial_gifts').select('*')
@@ -5816,10 +5815,18 @@ async function loadDecorationsForDeceased(deceasedId){
       if(!res.error&&res.data&&res.data.length>0){
         var animMap=GIFT_CATALOGUE.reduce(function(a,c){a[c.id]=c.anim;return a;},{});
         _decorationCache[deceasedId]=res.data.map(function(r){
-          return{id:r.gift_id,emoji:r.gift_emoji,anim:animMap[r.gift_id]||'ga-float',
-            x:r.pos_x||50,y:r.pos_y||40,name:r.sender_name||'Someone',
-            msg:r.message||'',time:timeSince(r.confirmed_at||r.created_at),
-            price:r.price_pi||0,payment_id:r.payment_id};
+          return{
+            id:r.gift_id,
+            emoji:r.gift_emoji,
+            anim:animMap[r.gift_id]||'ga-float',
+            x:r.pos_x||50,
+            y:r.pos_y||40,
+            name:r.sender_name||'Someone',
+            msg:r.message||'',
+            time:timeSince(r.confirmed_at||r.created_at),
+            price:r.price_pi||0,
+            payment_id:r.payment_id
+          };
         });
         renderDecorations(deceasedId,false);
         updateDecorateStats(deceasedId);
@@ -5827,9 +5834,17 @@ async function loadDecorationsForDeceased(deceasedId){
       }
     }catch(e){console.error('[Decorate] load:',e);}
   }
-  // If no Supabase data and this is quartno74's own memorial: show example gifts
-  if(dec&&dec.created_by&&CU&&dec.created_by===CU.id){
+
+  // No real gifts yet — show example decorations on the creator's own memorials
+  // so new users can see how a decorated memorial looks
+  var isCreator=dec&&dec.created_by&&CU&&dec.created_by===CU.id;
+  if(isCreator){
     _decorationCache[deceasedId]=EXAMPLE_DECORATIONS.map(function(d){return Object.assign({},d);});
+    renderDecorations(deceasedId,false);
+    updateDecorateStats(deceasedId);
+  }else{
+    // Other users see an empty wall (no real gifts yet)
+    _decorationCache[deceasedId]=[];
     renderDecorations(deceasedId,false);
     updateDecorateStats(deceasedId);
   }
